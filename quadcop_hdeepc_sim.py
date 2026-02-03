@@ -1,11 +1,13 @@
 import numpy as np
+import cvxpy as cp
 from scipy.linalg import block_diag, expm
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from mpl_toolkits.mplot3d import Axes3D
+from MPC_Controller import MPC_Controller
 from quadcopter_plant import Quadcopter
 
-### PID Controller for Quadcopter as a baseline comparison
+#### HDeePC Control of Quadcopter with Cascaded Position and Attitude Control Loops
 
 ### Quadcopter Plant
 quadcopter = Quadcopter(0.468, 0.225, 2.98e-6, 1.14e-7, 3.357e-5, [4.856e-3, 4.856e-3, 8.801e-3], [0.25, 0.25, 0.25]) 
@@ -22,27 +24,42 @@ theta_history = []
 psi_history = []
 w_i_history = np.array([]).reshape(0,4)
 
+### State Space Model of Quadcopter Plant 
 g = 9.80665  # gravitational acceleration (m/s^2)
+A = quadcopter.A
+B = quadcopter.B
+C = quadcopter.C
+D = quadcopter.D
 
-# Outer-loop gains (position)
-Kp_xy = 0.5
-Kd_xy = 1.0
+print("Quadcopter State-Space Matrices:")
+print("A =", A) 
+print("B =", B)
+print("C =", C)
+print("D =", D)
 
-Kp_z  = 1.0
-Kd_z  = 1.5
+# Outer-loop position gains
+Kp_xy = 1.5
+Kd_xy = 2.0
 
+Kp_z = 3.0
+Kd_z = 2.0
 
-# Inner-loop gains (attitude + thrust)
-Kp_att = np.array([10.0, 10.0, 5.0])
-Kd_att = np.array([3.0,  3.0,  1.0])
+Q = np.diag([0, 0, 10000, 600, 600, 600])
+R = np.diag([0.1, 0.1, 0.1, 0.1])
 
-Kp_T = 8.0
-Kd_T = 5.0
+u_min = np.array([0, -1, -1, -1])
+u_max = np.array([10, 1, 1, 1])
+du_min = None
+du_max = None
+# du_min = np.array([-10, -2, -2, -2])
+# du_max = np.array([10, 2, 2, 2])
 
 ref = np.array([0, 0, 0, 0, 0, 0])  # desired position and orientation, [x, y, z, phi, theta, psi]
 radius = 1          # radius (m)
 omega = 2.5    # rad per timestep
 #z_ref = 0.0005
+
+mpc = MPC_Controller(A, B, C, D, Q, R, dt, ref, u_min, u_max, du_min, du_max, Np=50, Nc=10, discretize=True)
 
 for k in range(sim_steps):
     t = k * dt
@@ -74,54 +91,54 @@ for k in range(sim_steps):
         ydd_d = 0.0
         zdd_d = 0.0
 
-    x, y, z     = quadcopter.state[0:3]
+
+    x, y, z = quadcopter.state[0:3]
     phi, theta, psi = quadcopter.state[3:6]
-    vx, vy, vz  = quadcopter.state[6:9]
-    p, q, r     = quadcopter.state[9:12]
+    xd, yd, zd = quadcopter.state[6:9]
 
-    ex, ey, ez = x_d - x, y_d - y, z_d - z
-    evx, evy, evz = xd_d - vx, yd_d - vy, zd_d - vz
+    # Position errors
+    ex = x_d - x
+    ey = y_d - y
+    ez = z_d - z
 
+    # Velocity errors
+    evx = xd_d - xd
+    evy = yd_d - yd
+    evz = zd_d - zd
+
+    # Commanded accelerations
     ax_cmd = Kp_xy * ex + Kd_xy * evx + xdd_d
     ay_cmd = Kp_xy * ey + Kd_xy * evy + ydd_d
     az_cmd = Kp_z  * ez + Kd_z  * evz + zdd_d
 
     theta_ref =  ax_cmd / g
     phi_ref   = -ay_cmd / g
-    psi_ref   = 0.0
 
+    # Total thrust command
     T_ref = quadcopter.mass * (g + az_cmd)
 
-    # =========================
-    # INNER LOOP (Attitude + Thrust PID)
-    # =========================
-    # Attitude errors
-    e_att = np.array([
-        phi_ref   - phi,
-        theta_ref - theta,
-        psi_ref   - psi
+    # MPC reference (THIS is the key)
+    ref = np.array([
+        0.0,        # x ignored
+        0.0,        # y ignored
+        z_d,      # altitude
+        phi_ref,    # roll
+        theta_ref,  # pitch
+        0.0         # yaw
     ])
 
-    e_rate = np.array([-p, -q, -r])
+    mpc.x = quadcopter.state.reshape(-1,1).copy()
+    mpc.ref = ref.reshape(-1,1)
 
-    tau = Kp_att * e_att + Kd_att * e_rate
+    x_pred, y_pred, u_applied = mpc.step()
 
-    # Thrust tracking (Z dynamics!)
-    T = (
-        T_ref
-        + Kp_T * (z_d - z)
-        + Kd_T * (zd_d - vz)
-    )
+    hover_force = quadcopter.mass * g
+    force_vect = u_applied.flatten()
+    #force_vect[0] += hover_force
+    #print("Control inputs (rotor speeds):", force_vect)
+    # 4) Apply MPC control input to the real inverted pendulum
 
-    # =========================
-    # Control vector → motors
-    # =========================
-    u = np.array([T, tau[0], tau[1], tau[2]])
-
-    w_i = np.sqrt(
-        np.clip(quadcopter.M_inv @ u, 0, None)
-    )
-
+    w_i = np.sqrt(np.clip(quadcopter.M_inv @ force_vect, 0, None))
     quadcopter.step(w_i, dt)
 
     x_history.append(quadcopter.state[0])

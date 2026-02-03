@@ -12,7 +12,7 @@ quadcopter = Quadcopter(0.468, 0.225, 2.98e-6, 1.14e-7, 3.357e-5, [4.856e-3, 4.8
                         #mass, arm_length, lift_constant, drag_constant, rotor_inertia_moment, inertia,  A_drag
                         #Note: Hover is around 625 rad/s
 dt = 0.001
-sim_steps = 25000
+sim_steps = 15000
 time = np.arange(sim_steps) * dt
 x_history = []
 y_history = []
@@ -41,10 +41,10 @@ R = np.diag([0.1, 0.1, 0.1, 0.1])
 
 u_min = np.array([0, -1, -1, -1])
 u_max = np.array([10, 1, 1, 1])
-# du_min = np.array([-10, -2, -2, -2])
-# du_max = np.array([10, 2, 2, 2])
 du_min = None
 du_max = None
+# du_min = np.array([-10, -2, -2, -2])
+# du_max = np.array([10, 2, 2, 2])
 
 ref = np.array([0, 0, 0, 0, 0, 0])  # desired position and orientation, [x, y, z, phi, theta, psi]
 radius = 1          # radius (m)
@@ -55,7 +55,7 @@ mpc = MPC_Controller(A, B, C, D, Q, R, dt, ref, u_min, u_max, du_min, du_max, Np
 
 for k in range(sim_steps):
     t = k * dt
-    if k < 15000:
+    if k < 10000:
         # Desired position
         x_d = radius * np.cos(omega * t)
         y_d = radius * np.sin(omega * t)
@@ -70,10 +70,10 @@ for k in range(sim_steps):
         xdd_d = -radius * omega**2 * np.cos(omega * t)
         ydd_d = -radius * omega**2 * np.sin(omega * t)
         zdd_d = 0.0
-    elif k >= 15000:
-        x_d = 5
-        y_d = 5
-        z_d = 5
+    elif k >= 10000:
+        x_d = 3
+        y_d = 3
+        z_d = 3
 
         xd_d = 0.0
         yd_d = 0.0
@@ -97,8 +97,6 @@ for k in range(sim_steps):
     evx = xd_d - xd
     evy = yd_d - yd
     evz = zd_d - zd
-
-
 
     # Commanded accelerations
     ax_cmd = Kp_xy * ex + Kd_xy * evx + xdd_d
