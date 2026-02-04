@@ -44,10 +44,10 @@ x0 = inv_pendulum.x.copy()                    # [1, 0, 0, 0]
 y0 = x0.copy()             # outputs: [position, angle]
 
 #HDeePC specific system matrices
-nu = 0  # number of unknown states
-nk = 4  # number of known states
-pu = 0   # number of unknown outputs
-pk = 4   # number of known outputs
+nu = 2  # number of unknown states
+nk = 2  # number of known states
+pu = 2   # number of unknown outputs
+pk = 2   # number of known outputs
 NP = [nu, nk, pu, pk]
 
 Ac = A[nu:, :nu]
@@ -95,7 +95,7 @@ for k in range(sim_steps):
         #ref = np.array([1, 0, 0, 0]).reshape(4,1)  # new reference position
         x = inv_pendulum.step(30.0)  # apply disturbance
     u_ini_new = u_history[-T_ini:] #Get last T_ini inputs
-    y_ini_new = y_u_history[-T_ini:, :pu]  ### Getting an error here as our y_ini_new is from x_history, but we actually only need 2 term
+    y_ini_new = y_u_history[-T_ini:, :pu] 
     x = inv_pendulum.x.copy()
     xk = x[nu:]    
     hdeepc.update(u_ini_new, y_ini_new, xk, ref)
@@ -112,6 +112,7 @@ for k in range(sim_steps):
     y_u_history = np.vstack([y_u_history, y_meas[:pu].reshape(1, -1)])  # Ensure correct dimensions
     u_history = np.vstack([u_history, np.array([[u_deepc[0]]])])
     print(f"Step {k}: Applied control u = {u_deepc[0]:.5f}, State x = {x}")
+    
     tracking_costs.append(hdeepc.J_track)
     input_costs.append(hdeepc.J_input)
     reg_costs.append(hdeepc.J_reg)

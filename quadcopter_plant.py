@@ -48,6 +48,21 @@ class Quadcopter:
         self.B = B
         self.C = C
         self.D = np.zeros((6,4))
+
+        # Exact discretization of (A,B)
+        n = A.shape[0]
+        m = B.shape[1]
+        T = 0.001
+
+        M = np.block([
+            [A,               B],
+            [np.zeros((m, n)), np.zeros((m, m))]
+        ])
+
+        Md = expm(M * T)
+
+        self.Ad = Md[:n, :n]
+        self.Bd = Md[:n, n:n+m]
  
     def body_inertial_frame(self, phi, theta, psi):
         R = np.array([
@@ -130,6 +145,8 @@ class Quadcopter:
         self.state = x + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
 
         self.state[5] = self.wrap_angle(self.state[5])   # psi
+
+
 
 # ### Simulation Loop for Initial Testing
 # quadcopter = Quadcopter(0.468, 0.225, 2.98e-6, 1.14e-7, 3.357e-5, [4.856e-3, 4.856e-3, 8.801e-3], [0.25, 0.25, 0.25]) 

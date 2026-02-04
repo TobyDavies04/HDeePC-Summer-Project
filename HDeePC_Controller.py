@@ -390,7 +390,10 @@ class HDeePC_Controller:
             cost += cp.quad_form(y_k - self.ref_k, self.Q_k_bar)
 
         # Input cost
-        R_bar = block_diag(*[self.R for _ in range(self.N)])
+        #R_bar = block_diag(*[self.R for _ in range(self.N)])
+        R_bar = block_diag(*[np.diagflat(self.R) for _ in range(self.N)])
+        # print("Shape u:", u.shape)
+        # print("Shape r_bar:", R_bar.shape)
         cost += cp.quad_form(u, R_bar)
 
         # Regularization

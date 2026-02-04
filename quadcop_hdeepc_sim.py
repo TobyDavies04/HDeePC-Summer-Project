@@ -4,7 +4,7 @@ from scipy.linalg import block_diag, expm
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from mpl_toolkits.mplot3d import Axes3D
-from MPC_Controller import MPC_Controller
+from HDeePC_Controller import HDeePC_Controller
 from quadcopter_plant import Quadcopter
 
 #### HDeePC Control of Quadcopter with Cascaded Position and Attitude Control Loops
@@ -14,7 +14,7 @@ quadcopter = Quadcopter(0.468, 0.225, 2.98e-6, 1.14e-7, 3.357e-5, [4.856e-3, 4.8
                         #mass, arm_length, lift_constant, drag_constant, rotor_inertia_moment, inertia,  A_drag
                         #Note: Hover is around 625 rad/s
 dt = 0.001
-sim_steps = 15000
+sim_steps = 2000
 time = np.arange(sim_steps) * dt
 x_history = []
 y_history = []
@@ -44,22 +44,99 @@ Kd_xy = 2.0
 Kp_z = 3.0
 Kd_z = 2.0
 
-Q = np.diag([0, 0, 10000, 600, 600, 600])
-R = np.diag([0.1, 0.1, 0.1, 0.1])
+Q = [0, 0, 10000, 600, 600, 600]
+R = [0.1, 0.1, 0.1, 0.1]
 
 u_min = np.array([0, -1, -1, -1])
 u_max = np.array([10, 1, 1, 1])
 du_min = None
 du_max = None
-# du_min = np.array([-10, -2, -2, -2])
-# du_max = np.array([10, 2, 2, 2])
+
+# DeePC parameters
+# u_data = np.load("u_history_IP.npy")   #Need to get data for quadcopter
+# x_data = np.load("x_history_IP.npy")
+
+#Added_Code
+T_data = 300  # data length
+m = 4     # number of inputs
+p_u = 6   # unknown outputs: angles + angular rates
+
+u_d = 6 * (np.random.rand(m, T_data+1) - 0.5)
+y_d = np.zeros((p_u, T_data))
+x_d = np.zeros((12, T_data+1))
+
+x_d[:, 0] = np.random.rand(12)
+noiseM = 0.01
+
+for k in range(T_data):
+    # propagate full nonlinear quadcopter model
+    quadcopter.state = x_d[:, k].copy()
+    quadcopter.step(u_d[:, k], dt)
+    x_d[:, k+1] = quadcopter.state.copy()
+
+    # extract unknown outputs
+    u, v, w = x_d[6:9, k]
+    p, q, r = x_d[9:12, k]   # angular rates (or however stored)
+
+    noise = noiseM * 2 * (np.random.rand(p_u) - 0.5)
+    y_d[:, k] = np.array([u, v, w, p, q, r]) + noise
+
+u_d = u_d.T  # shape (T_data, m)
+u_d = u_d[:-1, :]  # remove last input to match y_d length
+y_d = y_d.T  # shape (T_data, p_u)    
+print("input data shape:", u_d.shape)
+print("output data shape:", y_d.shape)
+#Finished_added_code
+
+T_ini = 6
+x0 = quadcopter.state.copy()                    # [1, 0, 0, 0]
+y0 = x0[6:]            # outputs: [position, angle]
+
+#HDeePC specific system matrices
+nu = 12  # number of unknown states
+nk = 0 # number of known states
+pu = 6   # number of unknown outputs
+pk = 0   # number of known outputs
+NP = [nu, nk, pu, pk]
+
+#Chek these are correct
+Ac = A[nu:, :nu]
+Ak = A[nu:, nu:]
+Bk = B[nu:, :]
+Cc = C[pu:, :pu]
+Ck = C[pu:, pu:]
+Dk = D[pu:, :]
+
+Cy = np.zeros((pk, pu))
+Ay = Ac.copy()
+
+# Past outputs: assume we sat at x0 for T_ini steps with zero input
+# y_uini = np.tile(y0[:pu].reshape(1, pu), (T_ini, 1))
+# u_ini = np.zeros((T_ini, 4))                          # shape (T_ini, 1)
+u_ini = u_d[:T_ini, :]
+y_uini = y_d[:T_ini, :]
+print("y_uini shape:", y_uini.shape)
+print("u_ini shape:", u_ini.shape)
+
+N = 60
+
+# Histories for simulation start
+state_history = np.empty((0, nu+nk))
+y_u_history = y_uini.copy()
+u_history = u_ini.copy()
+
+lambda_g = 3e1
+lambda_y = 1e6
+lambda_u = 1e6
 
 ref = np.array([0, 0, 0, 0, 0, 0])  # desired position and orientation, [x, y, z, phi, theta, psi]
 radius = 1          # radius (m)
 omega = 2.5    # rad per timestep
 #z_ref = 0.0005
 
-mpc = MPC_Controller(A, B, C, D, Q, R, dt, ref, u_min, u_max, du_min, du_max, Np=50, Nc=10, discretize=True)
+hdeepc = HDeePC_Controller(Ac, Ak, Ay, Bk, Cc, Ck, Cy, Dk, u_d,
+                            y_d, u_ini, y_uini, N, Q, R, ref, u_min, u_max, 
+                            du_min, du_max, lambda_g, lambda_y, lambda_u, NP, calculate_Ay_Cy=False)
 
 for k in range(sim_steps):
     t = k * dt
@@ -67,6 +144,7 @@ for k in range(sim_steps):
         # Desired position
         x_d = radius * np.cos(omega * t)
         y_d = radius * np.sin(omega * t)
+
         z_d = 0.0001 * k
 
         # Desired velocity
@@ -127,10 +205,15 @@ for k in range(sim_steps):
         0.0         # yaw
     ])
 
-    mpc.x = quadcopter.state.reshape(-1,1).copy()
-    mpc.ref = ref.reshape(-1,1)
+    #change this to using the update function
+    u_ini_new = u_history[-T_ini:] #Get last T_ini inputs
+    y_ini_new = y_u_history[-T_ini:, :pu]  
+    x = quadcopter.state.copy()
+    xk = x[nu:]    
+    hdeepc.update(u_ini_new, y_ini_new, xk, ref)
 
-    x_pred, y_pred, u_applied = mpc.step()
+    u_applied = hdeepc.opt_problem()
+    #print("Optimized control input:", u_applied, u_applied.shape)
 
     hover_force = quadcopter.mass * g
     force_vect = u_applied.flatten()
@@ -140,6 +223,11 @@ for k in range(sim_steps):
 
     w_i = np.sqrt(np.clip(quadcopter.M_inv @ force_vect, 0, None))
     quadcopter.step(w_i, dt)
+
+    y_meas = x.copy()
+    state_history = np.vstack([state_history, y_meas.reshape(1, -1)])
+    y_u_history = np.vstack([y_u_history, y_meas[:pu].reshape(1, -1)])  # Ensure correct dimensions
+    u_history = np.vstack([u_history, np.array(u_applied)])
 
     x_history.append(quadcopter.state[0])
     y_history.append(quadcopter.state[1])
