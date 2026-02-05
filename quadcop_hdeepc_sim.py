@@ -65,6 +65,7 @@ u_d = 6 * (np.random.rand(m, T_data+1) - 0.5)
 y_d = np.zeros((p_u, T_data))
 x_d = np.zeros((12, T_data+1))
 
+
 x_d[:, 0] = np.random.rand(12)
 noiseM = 0.01
 
